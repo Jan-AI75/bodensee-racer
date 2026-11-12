@@ -1334,24 +1334,28 @@ function refreshTouch() {
     else if (z === 'gas') input.touchGas = true;
   });
 }
-function onPointerDown(e) {
-  e.preventDefault();
-  const p = toLogical(e);
-  SOUND.unlock();
+// Knöpfe auf den Bildschirmen (Start, Schalter, WEITER, Ton) lösen erst beim LOSLASSEN aus:
+// iOS Safari erlaubt Ton und Bewegungssensor nur aus einer "echten" Nutzeraktion,
+// und bei Touch zählt dafür erst das Loslassen (pointerup), nicht das Herunterdrücken.
+const taps = new Map();         // pointerId -> true, solange ein Knopf-Tipp läuft
+const near = (p, b, pad) => p.x >= b.x - pad && p.x <= b.x + b.w + pad && p.y >= b.y - pad && p.y <= b.y + b.h + pad;
+
+function handleTap(p) {
   if (hitSoundButton(p)) { toggleSound(); return; }
   if (S.mode === 'title') {
-    const b = startButtonRect();
-    if (p.x >= b.x - 20 && p.x <= b.x + b.w + 20 && p.y >= b.y - 20 && p.y <= b.y + b.h + 20) { startCountdown(); return; }
+    if (near(p, startButtonRect(), 20)) { startCountdown(); return; }
     const t = titleToggles().find(t => p.x >= t.x - 4 && p.x <= t.x + t.w + 4 && p.y >= t.y - 8 && p.y <= t.y + t.h + 8);
     if (t && t.id === 'sound') toggleSound();
     if (t && t.id === 'tilt') TILT.toggle();
-    return;
+  } else if (S.mode === 'result') {
+    if (S.modeTime > 1.2 && near(p, resultButtonRect(), 20)) closeResult();
   }
-  if (S.mode === 'result') {
-    const b = resultButtonRect();
-    if (S.modeTime > 1.2 && p.x >= b.x - 20 && p.x <= b.x + b.w + 20 && p.y >= b.y - 20 && p.y <= b.y + b.h + 20) closeResult();
-    return;
-  }
+}
+function onPointerDown(e) {
+  e.preventDefault();
+  const p = toLogical(e);
+  SOUND.unlock();                                         // reicht am Desktop (Maus), auf iOS erst beim Loslassen
+  if (hitSoundButton(p) || S.mode === 'title' || S.mode === 'result') { taps.set(e.pointerId, true); return; }
   try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* egal */ }
   pointers.set(e.pointerId, zoneAt(p));
   refreshTouch();
@@ -1362,15 +1366,23 @@ function onPointerMove(e) {
   pointers.set(e.pointerId, zoneAt(toLogical(e)));
   refreshTouch();
 }
-function onPointerUp(e) {
+function onPointerRelease(e) {
   pointers.delete(e.pointerId);
+  taps.delete(e.pointerId);
   refreshTouch();
+}
+function onPointerUp(e) {
+  e.preventDefault();
+  SOUND.unlock();                                         // iOS: hier darf der Ton starten
+  const wasTap = taps.has(e.pointerId);
+  onPointerRelease(e);
+  if (wasTap) handleTap(toLogical(e));
 }
 canvas.addEventListener('pointerdown', onPointerDown);
 canvas.addEventListener('pointermove', onPointerMove);
 canvas.addEventListener('pointerup', onPointerUp);
-canvas.addEventListener('pointercancel', onPointerUp);
-canvas.addEventListener('lostpointercapture', onPointerUp);
+canvas.addEventListener('pointercancel', onPointerRelease);
+canvas.addEventListener('lostpointercapture', onPointerRelease);
 
 const KEYMAP = {
   ArrowLeft: 'keyLeft', KeyA: 'keyLeft', ArrowRight: 'keyRight', KeyD: 'keyRight',
@@ -1505,7 +1517,9 @@ const TILT = (function () {
   // Muss direkt aus einer Berührung heraus aufgerufen werden (iOS)
   function request(cb) {
     if (!needsPermission()) { cb(true); return; }
-    DeviceOrientationEvent.requestPermission().then(r => cb(r === 'granted')).catch(() => cb(false));
+    DeviceOrientationEvent.requestPermission()
+      .then(r => cb(r === 'granted', r))
+      .catch(() => cb(false, 'error'));
   }
   // Ausschlag mit toter Zone: -1..1
   function axis(delta, range, dead) {
@@ -1518,8 +1532,11 @@ const TILT = (function () {
     get enabled() { return enabled; },
     toggle() {
       if (enabled) { enabled = false; listen(false); saved.tilt = false; store.save(saved); return; }
-      request(ok => {
-        if (!ok) { hint('Neigen wurde nicht erlaubt'); return; }
+      request((ok, why) => {
+        if (!ok) {
+          hint(why === 'denied' ? 'Gesperrt: Safari ganz schließen + neu öffnen' : 'Hat nicht geklappt, bitte nochmal tippen');
+          return;
+        }
         enabled = true; listen(true); saved.tilt = true; store.save(saved);
         hint('Vor = Gas · zurück = Stopp · seitlich = lenken');
       });
