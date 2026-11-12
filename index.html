@@ -31,7 +31,7 @@ const CFG = {
   hudH: 40,
   segLen: 200,                       // Länge eines Straßensegments (Welt-Einheiten)
   rumbleLen: 3,                      // Segmente pro Farbstreifen
-  roadWidth: 900,                    // halbe Fahrbahnbreite
+  roadWidth: 1080,                   // halbe Fahrbahnbreite (+20 % gegenüber der Skizze)
   camHeight: 1000,
   camDepth: 0.84,
   drawDist: 260,                     // Segmente bis zum Horizont
@@ -48,7 +48,7 @@ const CFG = {
   shoreX: 2.4,                       // Uferlinie (in Fahrbahn-Halbbreiten)
   segPerKm: 900,                     // für Ortsschilder und km-Zähler
   carWorld: 640,                     // Breite der Gegnerautos (Welt-Einheiten)
-  carHitX: 0.62,                     // seitlicher Abstand, ab dem es kracht
+  carHitX: 0.56,                     // seitlicher Abstand, ab dem es kracht
   startTime: 45,                     // Sekunden zu Beginn
   finishPad: 400,                    // Segmente hinter der Ziellinie (Hafen)
   pointsPerSecond: 100,              // Bonus je Restsekunde im Ziel
@@ -277,6 +277,21 @@ function decorateStage(si) {
     }
     if (lakeLeft && i % 50 === 25 && si !== 4) addSprite(i, 'bush', -(1.6 + rnd() * 0.3), { size: 0.6 });
   }
+  // Häuser: Ortsausfahrt am Etappenanfang, Ortseinfahrt am Etappenende, ab und zu ein Hof
+  const houseSide = lakeLeft ? [1] : [1, -1];
+  const placeHouse = (i) => {
+    const side = pick(houseSide);
+    addSprite(i, 'house', side * (2.1 + rnd() * 0.9), { size: 0.85 + rnd() * 0.35, v: Math.floor(rnd() * 4) });
+  };
+  for (let i = a + 14; i < a + 90; i += 9 + Math.floor(rnd() * 5)) placeHouse(i);
+  for (let i = b - 130; i < b - 6; i += 9 + Math.floor(rnd() * 5)) placeHouse(i);
+  for (let i = a + 160; i < b - 160; i += 140 + Math.floor(rnd() * 80)) { placeHouse(i); if (rnd() < 0.5) placeHouse(i + 4); }
+  // Jubelnde Zuschauer rund um Start bzw. Checkpoint
+  const arch = a + (si === 0 ? 10 : 2);
+  for (let i = arch - 14; i <= arch + 6; i += 4) {
+    addSprite(i, 'fans', -(1.55 + rnd() * 0.25), { seedP: rnd() * 10 });
+    addSprite(i + 2, 'fans', 1.55 + rnd() * 0.25, { seedP: rnd() * 10 });
+  }
   // Ortsschilder mit Restentfernung
   for (let i = a + 30; i < b - 60; i += 300) {
     const km = Math.max(1, Math.round((b - i) / CFG.segPerKm * 10) / 10);
@@ -313,6 +328,11 @@ function decorateHarbor() {
   for (let i = f - 40; i < f + 20; i += 10) { addSprite(i, 'lamp', -1.35, {}); addSprite(i + 5, 'lamp', 1.35, { flip: true }); }
   for (let i = f + 40; i < f + 200; i += 12) addSprite(i, 'boat', (i % 24 ? -1 : 1) * (2.6 + (i % 5)), {});
   addSprite(f - 60, 'sign', 1.45, { town: 'HAFEN', km: 'ZIEL' });
+  // Großer Jubel an der Ziellinie
+  for (let i = f - 36; i <= f + 12; i += 3) {
+    addSprite(i, 'fans', -(1.5 + (i % 2) * 0.3), { seedP: i * 0.7 });
+    addSprite(i + 1, 'fans', 1.5 + (i % 3) * 0.15, { seedP: i * 1.3 });
+  }
 }
 
 function findSegment(z) { return segments[Math.floor(wrap(z, trackLength) / CFG.segLen)]; }
@@ -803,6 +823,48 @@ const SPRITES = {
     ctx.fillStyle = T.night ? '#FFE9A8' : '#FAC775'; ctx.fillRect(x - s * 0.17, y - s * 3.4, s * 0.34, s * 0.32);
     ctx.fillStyle = '#2F6F5E'; ctx.beginPath(); ctx.moveTo(x - s * 0.24, y - s * 3.4); ctx.lineTo(x + s * 0.24, y - s * 3.4); ctx.lineTo(x, y - s * 3.78); ctx.fill();
   },
+  house(x, y, s, T, sp) {                             // Bodensee-Haus mit Satteldach
+    const V = HOUSES[sp.v || 0], w = s, h = s * V.h;
+    ctx.fillStyle = T.night ? V.wallN : V.wall; ctx.fillRect(x - w / 2, y - h, w, h);
+    ctx.fillStyle = T.night ? '#5A2A20' : V.roof; ctx.beginPath();
+    ctx.moveTo(x - w * 0.58, y - h); ctx.lineTo(x, y - h - w * 0.42); ctx.lineTo(x + w * 0.58, y - h); ctx.closePath(); ctx.fill();
+    if (s < 6) return;
+    if (V.beams) {                                     // Fachwerk
+      ctx.fillStyle = T.night ? '#3A2416' : '#6B3F22';
+      ctx.fillRect(x - w / 2, y - h * 0.52, w, w * 0.035); ctx.fillRect(x - w / 2, y - h, w * 0.04, h); ctx.fillRect(x + w / 2 - w * 0.04, y - h, w * 0.04, h);
+    }
+    const win = T.night ? '#FAC775' : '#2B4A6B', cols = 3, rows = V.h > 0.8 ? 2 : 1;
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      if (r === rows - 1 && c === 1) continue;        // Platz für die Tür
+      const wx = x - w * 0.36 + c * w * 0.29, wy = y - h + h * (0.14 + r * 0.42);
+      ctx.fillStyle = T.night && (c + r + (sp.v || 0)) % 3 === 0 ? '#3A3A50' : win;
+      ctx.fillRect(wx, wy, w * 0.14, h * 0.22);
+      if (!T.night) { ctx.fillStyle = V.shutter; ctx.fillRect(wx - w * 0.04, wy, w * 0.035, h * 0.22); ctx.fillRect(wx + w * 0.145, wy, w * 0.035, h * 0.22); }
+    }
+    ctx.fillStyle = '#4A2E1A'; ctx.fillRect(x - w * 0.07, y - h * 0.38, w * 0.14, h * 0.38);
+    if (T.night) circle(x, y - h * 0.4, s * 0.25, 'rgba(250,199,117,0.12)');
+  },
+  fans(x, y, s, T, sp) {                              // Gruppe jubelnder Zuschauer
+    const ph = sp.seedP || 0;
+    for (let i = 0; i < 4; i++) {
+      const px = x + (i - 1.5) * s * 0.3, hop = Math.max(0, Math.sin(S.time * 7 + ph + i * 1.9)) * s * 0.08;
+      const by = y - hop, shirt = FAN_COLORS[(i + Math.floor(ph)) % FAN_COLORS.length];
+      ctx.fillStyle = T.night ? '#1C1C24' : '#2C2C2A';                       // Beine
+      ctx.fillRect(px - s * 0.06, by - s * 0.32, s * 0.05, s * 0.32); ctx.fillRect(px + s * 0.01, by - s * 0.32, s * 0.05, s * 0.32);
+      ctx.fillStyle = shirt; ctx.fillRect(px - s * 0.08, by - s * 0.66, s * 0.16, s * 0.36);   // Oberkörper
+      circle(px, by - s * 0.76, s * 0.075, i % 2 ? '#E8B48A' : '#C98E64');                    // Kopf
+      if (s > 5) {                                                                              // winkende Arme
+        const wave = Math.sin(S.time * 10 + ph + i * 2.3) * 0.12;
+        ctx.strokeStyle = shirt; ctx.lineWidth = Math.max(0.6, s * 0.045); ctx.beginPath();
+        ctx.moveTo(px - s * 0.07, by - s * 0.62); ctx.lineTo(px - s * (0.18 + wave), by - s * 0.98);
+        ctx.moveTo(px + s * 0.07, by - s * 0.62); ctx.lineTo(px + s * (0.18 - wave), by - s * 0.98);
+        ctx.stroke();
+        if (i === 1 && s > 10) {                                                                // Fähnchen
+          ctx.fillStyle = '#E24B4A'; ctx.fillRect(px + s * (0.18 - wave), by - s * 1.12, s * 0.16, s * 0.1);
+        }
+      }
+    }
+  },
   sign(x, y, s, T, sp) {                              // Ortsschild, s = Schildbreite (Skizze: 40)
     const k = s / 40;
     ctx.fillStyle = '#888780'; ctx.fillRect(x + 14 * k, y - 14 * k, 2 * k, 14 * k);
@@ -818,7 +880,14 @@ const SPRITES = {
     }
   }
 };
-const SPRITE_WORLD = { tree: 330, round: 340, apple: 300, poplar: 300, bush: 220, lion: 760, lighthouse: 800, reed: 380, vine: 330, boat: 520, lamp: 320, sign: 300 };
+const HOUSES = [
+  { wall: '#F1EFE8', wallN: '#6E6A5E', roof: '#B5452F', shutter: '#0F6E56', h: 0.95, beams: false },
+  { wall: '#F3E3B6', wallN: '#6F6448', roof: '#9C3B2A', shutter: '#7A3B22', h: 0.75, beams: true },
+  { wall: '#E9C9C0', wallN: '#6A5550', roof: '#5F5E5A', shutter: '#185FA5', h: 1.05, beams: false },
+  { wall: '#DCE8E0', wallN: '#5C6660', roof: '#B5452F', shutter: '#A32D2D', h: 0.85, beams: true }
+];
+const FAN_COLORS = ['#E24B4A', '#378ADD', '#EFC94C', '#3FB8A8', '#F1EFE8', '#D4537E'];
+const SPRITE_WORLD = { house: 780, fans: 420, tree: 330, round: 340, apple: 300, poplar: 300, bush: 220, lion: 760, lighthouse: 800, reed: 380, vine: 330, boat: 520, lamp: 320, sign: 300 };
 
 // Bogen über die Straße (Start / Checkpoint / Ziel)
 function drawArch(seg, sp) {
@@ -1030,7 +1099,33 @@ function drawHUD() {
   const prog = clamp((progressSegs() - st.start) / (st.end - st.start), 0, 1);
   ctx.fillStyle = '#2C2C2A'; ctx.fillRect(14, 36, 272, 3);
   ctx.fillStyle = '#5DCAA5'; ctx.fillRect(14, 36, 272 * prog, 3);
+  drawSoundButton();
 }
+
+// Lautsprecher-Knopf im HUD: jederzeit Ton an/aus
+const SOUND_BTN = { x: 196, y: 19, hit: { x0: 174, x1: 222, y0: 0, y1: 44 } };
+function drawSoundButton() {
+  const x = SOUND_BTN.x, y = SOUND_BTN.y, on = SOUND.enabled;
+  ctx.strokeStyle = on ? '#5F5E5A' : '#E24B4A'; ctx.lineWidth = 1;
+  rr(x - 13, y - 12, 26, 24, 5); ctx.stroke();
+  ctx.fillStyle = on ? '#D3D1C7' : '#888780';
+  ctx.beginPath(); ctx.moveTo(x - 7, y - 3); ctx.lineTo(x - 3, y - 3); ctx.lineTo(x + 2, y - 7); ctx.lineTo(x + 2, y + 7);
+  ctx.lineTo(x - 3, y + 3); ctx.lineTo(x - 7, y + 3); ctx.closePath(); ctx.fill();
+  ctx.lineWidth = 1.3; ctx.beginPath();
+  if (on) {
+    ctx.strokeStyle = '#D3D1C7';
+    ctx.arc(x + 3, y, 4, -0.9, 0.9); ctx.moveTo(x + 5.5, y - 6); ctx.arc(x + 3, y, 7, -0.9, 0.9);
+  } else {
+    ctx.strokeStyle = '#E24B4A';
+    ctx.moveTo(x + 4, y - 4); ctx.lineTo(x + 10, y + 4); ctx.moveTo(x + 10, y - 4); ctx.lineTo(x + 4, y + 4);
+  }
+  ctx.stroke();
+}
+function hitSoundButton(p) {
+  const h = SOUND_BTN.hit;
+  return p.x >= h.x0 && p.x <= h.x1 && p.y >= h.y0 && p.y <= h.y1;
+}
+function toggleSound() { SOUND.setEnabled(!SOUND.enabled); if (SOUND.enabled) SOUND.beep(880); }
 
 // --- Touch-Steuerung ------------------------------------------------------------
 const BTN = {};
@@ -1078,7 +1173,7 @@ function drawOverlay() {
     ctx.fillStyle = '#F1EFE8'; ctx.font = 'bold 18px monospace'; ctx.fillText('START', 150, b.y + b.h / 2 + 6);
     ctx.font = '500 9px monospace'; ctx.fillStyle = '#B4B2A9';
     ctx.fillText('◀ ▶ lenken · GAS geben', 150, b.y + b.h + 28);
-    ctx.fillText('Tastatur: Pfeiltasten + Leertaste', 150, b.y + b.h + 42);
+    ctx.fillText('Tastatur: Pfeiltasten + Leertaste, M = Ton', 150, b.y + b.h + 42);
     ctx.fillStyle = '#5DCAA5'; ctx.fillText('REKORD ' + saved.highscore, 150, b.y + b.h + 66);
     titleToggles().forEach(t => {
       ctx.fillStyle = t.on ? 'rgba(93,202,165,0.18)' : 'rgba(95,94,90,0.25)'; rr(t.x, t.y, t.w, t.h, 13); ctx.fill();
@@ -1219,11 +1314,12 @@ function onPointerDown(e) {
   e.preventDefault();
   const p = toLogical(e);
   SOUND.unlock();
+  if (hitSoundButton(p)) { toggleSound(); return; }
   if (S.mode === 'title') {
     const b = startButtonRect();
     if (p.x >= b.x - 20 && p.x <= b.x + b.w + 20 && p.y >= b.y - 20 && p.y <= b.y + b.h + 20) { startCountdown(); return; }
     const t = titleToggles().find(t => p.x >= t.x - 4 && p.x <= t.x + t.w + 4 && p.y >= t.y - 8 && p.y <= t.y + t.h + 8);
-    if (t && t.id === 'sound') { SOUND.setEnabled(!SOUND.enabled); if (SOUND.enabled) SOUND.beep(880); }
+    if (t && t.id === 'sound') toggleSound();
     if (t && t.id === 'tilt') TILT.toggle();
     return;
   }
@@ -1258,6 +1354,7 @@ const KEYMAP = {
 };
 window.addEventListener('keydown', e => {
   SOUND.unlock();
+  if (e.code === 'KeyM' && !e.repeat) toggleSound();
   if (KEYMAP[e.code]) { e.preventDefault(); input[KEYMAP[e.code]] = true; }
   if ((e.code === 'Enter' || e.code === 'Space') && !e.repeat) {
     if (S.mode === 'title') { e.preventDefault(); startCountdown(); }
