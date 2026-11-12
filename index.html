@@ -55,6 +55,8 @@ const CFG = {
   coinsDisplay: 2,                   // Münzanzeige (Standalone: ohne Funktion, Lern-App: setCoins)
   tiltRange: 18,                     // Grad Neigung für vollen Lenkeinschlag
   tiltDead: 0.12,                    // tote Zone um die Mitte
+  tiltGasRange: 14,                  // Grad nach vorne für Vollgas bzw. nach hinten für volle Bremse
+  tiltGasDead: 0.18,                 // tote Zone vorne/hinten (Auto rollt aus)
   storageKey: 'bodenseeRacer.v1'
 };
 const PLAYER_Z = CFG.camHeight * CFG.camDepth;
@@ -423,6 +425,7 @@ const S = {
   banner: null,           // { title, sub, color, t }
   result: null,
   coins: CFG.coinsDisplay,
+  gasAmt: 0, brakeAmt: 0, // aktuelle Gas-/Bremsstärke 0..1 (Knöpfe oder Neigung)
   toast: null,            // kurzer Hinweis auf dem Startbildschirm
   onEnd: null
 };
@@ -501,6 +504,7 @@ function update(dt) {
   if (S.mode === 'countdown') {
     const prev = Math.floor(S.modeTime - dt), cur = Math.floor(S.modeTime);
     if (cur !== prev && cur <= 3) SOUND.beep(cur === 3 ? 880 : 440);
+    TILT.settle(dt);                                   // Mitte = so, wie das Handy gerade gehalten wird
     if (S.modeTime >= 3) {
       S.mode = 'race'; S.modeTime = 0;
       showBanner('ETAPPE 1', STAGES[0].name, '#FAC775');
@@ -516,7 +520,7 @@ function update(dt) {
 
   // Lenken (bei Stillstand keine Wirkung, bei wenig Tempo etwas Grundlenkung)
   const digital = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-  const steerIn = !racing ? 0 : (digital || TILT.value());
+  const steerIn = !racing ? 0 : (digital || TILT.steer());
   const steerPower = S.speed > 50 ? 0.35 + 0.65 * sp : 0;
   S.playerX += steerIn * dt * CFG.steer * steerPower;
   // Fliehkraft
@@ -524,8 +528,11 @@ function update(dt) {
   S.steerVis = lerp(S.steerVis, steerIn, clamp(dt * 10, 0, 1));
 
   // Tempo
-  if (racing && input.gas) S.speed += CFG.accel * dt;
-  else if (racing && input.brake) S.speed += CFG.brake * dt;
+  const tiltPedal = racing ? TILT.pedal() : 0;          // -1 (zurück = Bremse) .. 1 (vor = Gas)
+  S.gasAmt = racing ? (input.gas ? 1 : Math.max(0, tiltPedal)) : 0;
+  S.brakeAmt = racing && !S.gasAmt ? (input.brake ? 1 : Math.max(0, -tiltPedal)) : 0;
+  if (S.gasAmt > 0) S.speed += CFG.accel * S.gasAmt * dt;
+  else if (S.brakeAmt > 0) S.speed += CFG.brake * S.brakeAmt * dt;
   else if (S.mode === 'finish' || S.mode === 'timeup') S.speed += CFG.brake * 0.45 * dt;
   else S.speed += CFG.coast * dt;
 
@@ -576,7 +583,7 @@ function update(dt) {
   S.sunOffset += playerSeg.curve * sp * dt * 6;
 
   const engineOn = racing || S.mode === 'countdown' || S.mode === 'finish' || S.mode === 'timeup';
-  SOUND.engine(sp, engineOn, racing && input.gas, offRoad && S.speed > 300);
+  SOUND.engine(sp, engineOn, S.gasAmt > 0.3, offRoad && S.speed > 300);
 }
 
 // =====================================================================
@@ -1016,7 +1023,7 @@ function drawPlayer() {
   let wob = 0;
   if (S.shake > 0) { bounce += (Math.random() - 0.5) * 6 * S.shake; wob = Math.sin(S.time * 50) * 0.12 * S.shake; }
   const px = W / 2 + S.steerVis * 4, py = L.viewBottom - 4 + bounce;
-  const braking = S.mode === 'race' && (input.brake || (!input.gas && S.speed > 100) || S.shake > 0.3);
+  const braking = S.mode === 'race' && (S.brakeAmt > 0.1 || (S.gasAmt < 0.1 && S.speed > 100) || S.shake > 0.3);
 
   // Fahrtwind ab hohem Tempo
   if (sp > 0.7) {
@@ -1139,14 +1146,19 @@ function drawControls() {
   const k = L.k;
   ctx.fillStyle = '#07070d'; ctx.fillRect(0, L.viewBottom, W, L.h - L.viewBottom);
   ctx.lineWidth = 1.5;
-  [[BTN.left, '◀', input.touchLeft], [BTN.right, '▶', input.touchRight]].forEach(([b, t, on]) => {
+  const tSteer = S.mode === 'race' ? TILT.steer() : 0;
+  [[BTN.left, '◀', input.touchLeft || tSteer < -0.3], [BTN.right, '▶', input.touchRight || tSteer > 0.3]].forEach(([b, t, on]) => {
     if (on) { ctx.fillStyle = 'rgba(211,209,199,0.18)'; ctx.fillRect(b.x, b.y, b.w, b.h); }
     ctx.strokeStyle = on ? '#D3D1C7' : '#5F5E5A'; ctx.strokeRect(b.x, b.y, b.w, b.h);
     ctx.fillStyle = '#D3D1C7'; ctx.font = '500 ' + Math.round(18 * k) + 'px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(t, b.x + b.w / 2, b.y + b.h / 2 + 6 * k);
   });
   const g = BTN.gas;
-  if (input.touchGas) circle(g.cx, g.cy, g.r, 'rgba(226,75,74,0.25)');
+  if (input.touchGas || S.gasAmt > 0.05) circle(g.cx, g.cy, g.r, 'rgba(226,75,74,' + (0.12 + 0.3 * Math.max(S.gasAmt, input.touchGas ? 1 : 0)).toFixed(2) + ')');
+  if (S.brakeAmt > 0.1 && !input.brake) {
+    ctx.fillStyle = '#E24B4A'; ctx.font = 'bold ' + Math.round(9 * k) + 'px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('STOP', g.cx, g.cy - g.r - 5);
+  }
   ctx.strokeStyle = '#E24B4A'; ctx.beginPath(); ctx.arc(g.cx, g.cy, g.r, 0, TAU); ctx.stroke();
   ctx.fillStyle = '#F09595'; ctx.font = '500 ' + Math.round(11 * k) + 'px monospace'; ctx.fillText('GAS', g.cx, g.cy + 4 * k);
   // Münzanzeige (ohne Funktion im Standalone-Modus)
@@ -1172,8 +1184,13 @@ function drawOverlay() {
     ctx.strokeStyle = 'rgba(250,199,117,' + pulse.toFixed(2) + ')'; ctx.lineWidth = 2; rr(b.x, b.y, b.w, b.h, 8); ctx.stroke();
     ctx.fillStyle = '#F1EFE8'; ctx.font = 'bold 18px monospace'; ctx.fillText('START', 150, b.y + b.h / 2 + 6);
     ctx.font = '500 9px monospace'; ctx.fillStyle = '#B4B2A9';
-    ctx.fillText('◀ ▶ lenken · GAS geben', 150, b.y + b.h + 28);
-    ctx.fillText('Tastatur: Pfeiltasten + Leertaste, M = Ton', 150, b.y + b.h + 42);
+    if (TILT.enabled) {
+      ctx.fillText('Handy neigen: vor = Gas · zurück = Stopp', 150, b.y + b.h + 28);
+      ctx.fillText('zur Seite = lenken · Knöpfe gehen auch', 150, b.y + b.h + 42);
+    } else {
+      ctx.fillText('◀ ▶ lenken · GAS geben', 150, b.y + b.h + 28);
+      ctx.fillText('Tastatur: Pfeiltasten + Leertaste, M = Ton', 150, b.y + b.h + 42);
+    }
     ctx.fillStyle = '#5DCAA5'; ctx.fillText('REKORD ' + saved.highscore, 150, b.y + b.h + 66);
     titleToggles().forEach(t => {
       ctx.fillStyle = t.on ? 'rgba(93,202,165,0.18)' : 'rgba(95,94,90,0.25)'; rr(t.x, t.y, t.w, t.h, 13); ctx.fill();
@@ -1189,7 +1206,14 @@ function drawOverlay() {
     const n = 3 - Math.floor(S.modeTime), f = S.modeTime % 1;
     ctx.textAlign = 'center'; ctx.font = 'bold ' + Math.round(64 + f * 20) + 'px monospace';
     ctx.fillStyle = 'rgba(250,199,117,' + (1 - f * 0.6).toFixed(2) + ')';
-    ctx.fillText(String(n), 150, midY); ctx.textAlign = 'left';
+    ctx.fillText(String(n), 150, midY);
+    if (TILT.enabled) {
+      ctx.font = '500 11px monospace'; ctx.fillStyle = '#F1EFE8';
+      ctx.fillText('Handy bequem und ruhig halten', 150, midY + 40);
+      ctx.font = '500 9px monospace'; ctx.fillStyle = '#B4B2A9';
+      ctx.fillText('so ist es die Mitte', 150, midY + 56);
+    }
+    ctx.textAlign = 'left';
   } else if (S.mode === 'race' && S.modeTime < 0.8) {
     ctx.textAlign = 'center'; ctx.font = 'bold 54px monospace';
     ctx.fillStyle = 'rgba(93,202,165,' + (1 - S.modeTime / 0.8).toFixed(2) + ')';
@@ -1259,7 +1283,7 @@ function drawResult() {
 function titleToggles() {
   const b = startButtonRect(), y = b.y + b.h + 88, list = [];
   list.push({ id: 'sound', label: '♪ TON', on: SOUND.enabled });
-  if (TILT.supported) list.push({ id: 'tilt', label: 'NEIGEN', on: TILT.enabled });
+  if (TILT.supported) list.push({ id: 'tilt', label: 'NEIGEN', on: TILT.enabled });   // lenken + Gas + Stopp
   const w = 104, gap = 12, total = list.length * w + (list.length - 1) * gap;
   list.forEach((t, i) => Object.assign(t, { x: 150 - total / 2 + i * (w + gap), y, w, h: 26 }));
   return list;
@@ -1472,8 +1496,9 @@ const SOUND = (function () {
 // =====================================================================
 const TILT = (function () {
   const supported = typeof window.DeviceOrientationEvent !== 'undefined' && (navigator.maxTouchPoints || 0) > 0;
-  let enabled = false, gamma = 0, zero = 0, live = false;
-  const onOrient = e => { if (e.gamma != null) { gamma = e.gamma; live = true; } };
+  // gamma = seitlich kippen (lenken), beta = vor/zurück kippen (Gas/Stopp)
+  let enabled = false, gamma = 0, beta = 45, zeroG = 0, zeroB = 45, live = false;
+  const onOrient = e => { if (e.gamma != null && e.beta != null) { gamma = e.gamma; beta = e.beta; live = true; } };
   const needsPermission = () => typeof DeviceOrientationEvent.requestPermission === 'function';
   function listen(on) { window[on ? 'addEventListener' : 'removeEventListener']('deviceorientation', onOrient); }
   function hint(text) { S.toast = { text, t: S.time }; }
@@ -1481,6 +1506,11 @@ const TILT = (function () {
   function request(cb) {
     if (!needsPermission()) { cb(true); return; }
     DeviceOrientationEvent.requestPermission().then(r => cb(r === 'granted')).catch(() => cb(false));
+  }
+  // Ausschlag mit toter Zone: -1..1
+  function axis(delta, range, dead) {
+    const v = clamp(delta / range, -1, 1);
+    return Math.abs(v) < dead ? 0 : (v - Math.sign(v) * dead) / (1 - dead);
   }
   if (supported && saved.tilt) { enabled = true; listen(true); }
   return {
@@ -1491,20 +1521,26 @@ const TILT = (function () {
       request(ok => {
         if (!ok) { hint('Neigen wurde nicht erlaubt'); return; }
         enabled = true; listen(true); saved.tilt = true; store.save(saved);
-        hint('Handy gerade halten, dann neigen zum Lenken');
+        hint('Vor = Gas · zurück = Stopp · seitlich = lenken');
       });
     },
+    // Beim Start: Erlaubnis sicherstellen und Mitte auf die aktuelle Haltung setzen
     calibrate() {
       if (!enabled) return;
       if (needsPermission()) request(ok => { if (!ok) { enabled = false; listen(false); } });
-      zero = clamp(gamma, -25, 25);
+      zeroG = clamp(gamma, -25, 25); zeroB = clamp(beta, 10, 80);
     },
-    // -1..1, 0 wenn aus oder keine Sensordaten
-    value() {
-      if (!enabled || !live) return 0;
-      const v = clamp((gamma - zero) / CFG.tiltRange, -1, 1);
-      return Math.abs(v) < CFG.tiltDead ? 0 : (v - Math.sign(v) * CFG.tiltDead) / (1 - CFG.tiltDead);
-    }
+    // Während des Countdowns sanft nachführen, damit die Mitte zur echten Haltung passt
+    settle(dt) {
+      if (!enabled || !live) return;
+      const k = clamp(dt * 3, 0, 1);
+      zeroG = lerp(zeroG, clamp(gamma, -25, 25), k);
+      zeroB = lerp(zeroB, clamp(beta, 10, 80), k);
+    },
+    // Lenken -1..1 (rechts kippen = rechts)
+    steer() { return enabled && live ? axis(gamma - zeroG, CFG.tiltRange, CFG.tiltDead) : 0; },
+    // Pedal -1..1: Oberkante vom Körper weg (vor) = Gas, zu sich hin (zurück) = Stopp
+    pedal() { return enabled && live ? axis(zeroB - beta, CFG.tiltGasRange, CFG.tiltGasDead) : 0; }
   };
 })();
 
